@@ -1,0 +1,19 @@
+name: Release notify
+
+# Notifies every configured channel (Discord, ...) whenever "Release and deploy" finishes. The pipeline lives in bnatividad/release-workflows.
+on:
+  workflow_run:
+    workflows: ["Release and deploy"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  deployments: read # look up the production address
+
+jobs:
+  notify:
+    uses: bnatividad/release-workflows/.github/workflows/notify.yml@v1
+    secrets: inherit
+    with:
+      discord-color: "95A5A6" # Stripe color of a successful message (hex, see https://htmlcolorcodes.com/). Failure is always red.

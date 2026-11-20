@@ -1,14 +1,23 @@
-name: Discord notify
+name: Release notify
 
 # Reusable notifier. A project calls it from a workflow that runs `on: workflow_run` when its release workflow
-# completes, so the release pipeline itself never mentions Discord. Everything it needs comes from that event and git:
+# completes, so the release pipeline itself never mentions any notification channel. Everything it needs comes from that event, git and
+# the GitHub Deployments the release pipeline records:
 #   - the run's result and link: github.event.workflow_run
 #   - the release: the first tag that contains the pushed commit (none if the run failed before tagging)
 #   - the previous release: the latest tag reachable from the pushed commit
+#   - the live address: the URL of the release's production deployment (or the latest one, if this run didn't deploy)
 #
-# Secrets: DISCORD_WEBHOOK_URL (without it, nothing is posted). Variables: APP_URL, DISCORD_COLOR (both optional).
+# It posts to every channel whose secret is set (see .github/actions/notify/channels/); with none, it posts nothing.
+# Channels: Discord (secret DISCORD_WEBHOOK_URL, input discord-color).
+# The caller must grant `permissions: contents: read, deployments: read`.
 on:
   workflow_call:
+    inputs:
+      discord-color:
+        description: Hex stripe color for a successful Discord message (gray when empty). A failure is always red.
+        type: string
+        default: ""
     secrets:
       DISCORD_WEBHOOK_URL:
         required: false
@@ -32,21 +41,32 @@ jobs:
         id: find
         env:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 "$HEAD_SHA" 2>/dev/null || true)
           NEW_TAG=$(git tag --contains "$HEAD_SHA" --sort=creatordate | head -n 1)
           if [ -n "$NEW_TAG" ]; then SHA=$(git rev-list -n 1 "$NEW_TAG"); else SHA="$HEAD_SHA"; fi
           git checkout -q "$SHA"
-          echo "Release ${NEW_TAG:-(none)} at $SHA, previous ${PREV_TAG:-(none)}"
+
+          DEPLOYMENTS="repos/$GITHUB_REPOSITORY/deployments?environment=production&per_page=1"
+          ID=$(gh api "$DEPLOYMENTS&sha=$SHA" --jq '.[0].id // empty' 2>/dev/null || true)
+          [ -n "$ID" ] || ID=$(gh api "$DEPLOYMENTS" --jq '.[0].id // empty' 2>/dev/null || true)
+          APP_URL=""
+          if [ -n "$ID" ]; then
+            APP_URL=$(gh api "repos/$GITHUB_REPOSITORY/deployments/$ID/statuses?per_page=1" --jq '.[0].environment_url // empty' 2>/dev/null || true)
+          fi
+
+          echo "Release ${NEW_TAG:-(none)} at $SHA, previous ${PREV_TAG:-(none)}, live at ${APP_URL:-(unknown)}"
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          echo "app_url=$APP_URL" >> "$GITHUB_OUTPUT"
 
-      - uses: bnatividad/release-workflows/.github/actions/discord-notify@v1
+      - uses: bnatividad/release-workflows/.github/actions/notify@v1
         with:
-          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
           state: ${{ github.event.workflow_run.conclusion }}
           sha: ${{ steps.find.outputs.sha }}
           prev-tag: ${{ steps.find.outputs.prev_tag }}
-          app-url: ${{ vars.APP_URL }}
-          color: ${{ vars.DISCORD_COLOR }}
+          app-url: ${{ steps.find.outputs.app_url }}
           run-url: ${{ github.event.workflow_run.html_url }}
+          discord-webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          discord-color: ${{ inputs.discord-color }}

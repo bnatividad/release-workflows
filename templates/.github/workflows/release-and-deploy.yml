@@ -10,7 +10,8 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write
+  contents: write # push the release commit and tag
+  deployments: write # record the production address
 
 jobs:
   release:

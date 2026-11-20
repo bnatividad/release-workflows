@@ -2,39 +2,58 @@ name: Vercel release
 
 # Reusable release pipeline. A project calls it on every push to main; it checks the commit messages, picks the next
 # version from them (fix -> patch, breaking -> minor while below 1.0), writes CHANGELOG.md, commits and tags the release,
-# and deploys that versioned build to Vercel. Notifications are separate: see discord-notify.yml, which a project
-# triggers with `workflow_run` when this pipeline completes.
+# and deploys that versioned build to Vercel. Afterwards it records a GitHub Deployment for the release commit whose URL
+# is the project's production domain, so other workflows (see notify.yml) can link the live site without
+# configuration. Notifications are separate: a project triggers them with `workflow_run` when this pipeline completes.
 #
 # The calling repo needs: package.json with a "release" script (commit-and-tag-version) and the commitlint dev deps,
-# .versionrc.json, commitlint.config.mjs, and vercel.json with Vercel's own deploy of main switched off.
-# The caller must grant `permissions: contents: write` and pass the secrets (`secrets: inherit` is simplest).
+# commitlint.config.mjs, optionally .versionrc.json (changelog sections), and the Vercel project IDs, either committed in .vercel/project.json (written
+# by `vercel link`) or as the VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets.
+# The caller must grant `permissions: contents: write, deployments: write` and pass the secrets (`secrets: inherit`).
 on:
   workflow_call:
     inputs:
       node-version:
         type: string
         default: "22"
+      app-url:
+        description: Production address to record. Leave empty to read it from the Vercel project's domains.
+        type: string
+        default: ""
     secrets:
       VERCEL_TOKEN:
         required: true
       VERCEL_ORG_ID:
-        required: true
+        required: false
       VERCEL_PROJECT_ID:
-        required: true
+        required: false
 
 jobs:
   release:
     runs-on: ubuntu-latest
     env:
       HUSKY: "0"
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
       - name: Check out with full history and tags
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Secrets win; otherwise use the IDs `vercel link` committed. Exported only when known, so the CLI never sees empty values.
+      - name: Find the Vercel project
+        env:
+          ORG_SECRET: ${{ secrets.VERCEL_ORG_ID }}
+          PROJECT_SECRET: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          ORG="${ORG_SECRET:-$(jq -r '.orgId // empty' .vercel/project.json 2>/dev/null || true)}"
+          PROJECT="${PROJECT_SECRET:-$(jq -r '.projectId // empty' .vercel/project.json 2>/dev/null || true)}"
+          if [ -z "$ORG" ] || [ -z "$PROJECT" ]; then
+            echo "::error::No Vercel project IDs. Commit .vercel/project.json (run 'vercel link') or set the VERCEL_ORG_ID and VERCEL_PROJECT_ID secrets."
+            exit 1
+          fi
+          echo "VERCEL_ORG_ID=$ORG" >> "$GITHUB_ENV"
+          echo "VERCEL_PROJECT_ID=$PROJECT" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
@@ -80,7 +99,41 @@ jobs:
 
       # Push before deploying, so the version is recorded even if the deploy fails.
       - name: Push the release commit and tag
-        run: git push --follow-tags origin HEAD:main
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: git push --follow-tags origin "HEAD:$BRANCH"
 
       - name: Deploy the build to Vercel
         run: npx vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      # The release is live at this point, so a problem here only warns instead of failing the run.
+      - name: Record the GitHub deployment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP_URL: ${{ inputs.app-url }}
+          SHA: ${{ steps.release.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            QUERY=""
+            case "$VERCEL_ORG_ID" in team_*) QUERY="?teamId=$VERCEL_ORG_ID" ;; esac
+            # The production domain: verified, not a redirect, not tied to a branch. A custom domain beats *.vercel.app.
+            DOMAIN=$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/domains$QUERY" | jq -r '
+                [ (.domains // [])[]
+                  | select(.verified and (.redirect | not) and (.gitBranch | not) and (.customEnvironmentId | not))
+                  | .name ]
+                | (map(select(endswith(".vercel.app") | not)) + map(select(endswith(".vercel.app"))))
+                | .[0] // empty')
+            if [ -n "$DOMAIN" ]; then APP_URL="https://$DOMAIN"; fi
+          fi
+          if [ -z "$APP_URL" ]; then
+            echo "::warning::Could not find the production domain; recording the deployment without a URL."
+          fi
+          echo "Production address: ${APP_URL:-(none)}"
+          ID=$(jq -n --arg ref "$SHA" \
+            '{ref: $ref, environment: "production", production_environment: true, auto_merge: false, required_contexts: []}' \
+            | gh api "repos/$GITHUB_REPOSITORY/deployments" --input - --jq .id)
+          jq -n --arg url "$APP_URL" --arg log "$RUN_URL" '{state: "success", environment_url: $url, log_url: $log}' \
+            | gh api "repos/$GITHUB_REPOSITORY/deployments/$ID/statuses" --input - > /dev/null
