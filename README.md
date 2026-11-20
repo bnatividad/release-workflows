@@ -1,10 +1,10 @@
 # release-workflows
 
-Reusable GitHub Actions release pipeline: conventional commits → semver bump & changelog → Vercel deploy → Discord notification.
+Reusable GitHub Actions release pipeline: conventional commits → semver bump & changelog → Vercel deploy → notifications (Discord, …).
 
-Every push to `main` releases a new version and deploys it to Vercel production. Discord notification is a separate, optional workflow that runs when the release finishes; the release pipeline itself has no Discord code.
+Every push to `main` releases a new version and deploys it to Vercel production. Notifications are a separate, optional workflow that runs when the release finishes; the release pipeline itself has no notification code.
 
-The GitHub repo does not need to be connected to Vercel: the pipeline deploys with the Vercel CLI and a token. This also works for private repos owned by a GitHub organization, which Vercel's free Hobby plan can't connect.
+The pipeline deploys with the Vercel CLI and a token, so it doesn't rely on Vercel's Git integration. This also works for private repos owned by a GitHub organization, which Vercel's free Hobby plan can't connect.
 
 ## How it works
 
@@ -13,13 +13,14 @@ The GitHub repo does not need to be connected to Vercel: the pipeline deploys wi
 Runs on every push to `main`, except the bot's own `chore(release)` commit.
 
 1. **Find the Vercel project.** Reads the project IDs from the `VERCEL_ORG_ID`/`VERCEL_PROJECT_ID` secrets, or from the committed `.vercel/project.json`.
-2. **Install.** Runs `npm ci`.
-3. **Check commits.** Fails if any commit in the push doesn't follow [Conventional Commits](https://www.conventionalcommits.org/).
-4. **Version.** [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) picks the next version from the commits, updates `package.json` and `CHANGELOG.md`, and creates the `chore(release): vX.Y.Z` commit and tag locally. Below 1.0, `fix`/`feat` bump the patch and a breaking change bumps the minor. With no tag yet, it tags the current version as the first release.
-5. **Build.** `vercel pull` and `vercel build --prod`. If this fails, nothing has been pushed.
-6. **Push.** Pushes the release commit and tag to the branch that triggered the run.
-7. **Deploy.** `vercel deploy --prebuilt --prod`.
-8. **Record the deployment.** Looks up the production domain from Vercel (or uses `app-url`) and records a GitHub Deployment for the release commit with that URL. If this step fails, it only warns.
+2. **Check Vercel's own deploys.** Warns if the repo is connected to the Vercel project but `vercel.json` doesn't switch off Vercel's own deploy of the release branch.
+3. **Install.** Runs `npm ci`.
+4. **Check commits.** Fails if any commit in the push doesn't follow [Conventional Commits](https://www.conventionalcommits.org/).
+5. **Version.** [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) picks the next version from the commits, updates `package.json` and `CHANGELOG.md`, and creates the `chore(release): vX.Y.Z` commit and tag locally. Below 1.0, `fix`/`feat` bump the patch and a breaking change bumps the minor. With no tag yet, it tags the current version as the first release.
+6. **Build.** `vercel pull` and `vercel build --prod`. If this fails, nothing has been pushed.
+7. **Push.** Pushes the release commit and tag to the branch that triggered the run.
+8. **Deploy.** `vercel deploy --prebuilt --prod`.
+9. **Record the deployment.** Looks up the production domain from Vercel (or uses `app-url`) and records a GitHub Deployment for the release commit with that URL. If this step fails, it only warns.
 
 ### `notify.yml`
 
@@ -34,6 +35,11 @@ Each channel is one file in [`.github/actions/notify/channels/`](.github/actions
 ## Set up a project
 
 These steps assume a Node project with a `package.json` and a `package-lock.json` (the pipeline runs `npm ci`). Setup needs one secret, `VERCEL_TOKEN`, plus `DISCORD_WEBHOOK_URL` if you want notifications.
+
+Before you start, log in to both CLIs:
+
+- `gh auth login`, with an account that can set secrets on the project repo.
+- `npx vercel login`.
 
 ### 1. Install the dev dependencies
 
@@ -92,7 +98,51 @@ Don't set `releaseCommitMessageFormat` in it. The workflows rely on the default 
 
 Run `npm install` once more so `prepare` installs the husky hook.
 
-### 3. Add the release workflow
+### 3. Set up the Vercel project
+
+Run `npx vercel link` in the project. It picks the Vercel project, or creates a new one without asking if none matches. Afterwards, check the project at [vercel.com](https://vercel.com/dashboard): its Root Directory must match where the app lives in the repo, and it must not be connected to a different GitHub repo.
+
+`vercel link` also connects the GitHub repo to the project, which makes Vercel deploy every push on its own: `main` to production and other branches as previews. Add a `vercel.json` that switches off all of Vercel's own deploys, so this pipeline is the only thing that deploys:
+
+```json
+{
+  "git": {
+    "deploymentEnabled": false
+  }
+}
+```
+
+The release run warns if the repo is connected without this setting.
+
+`vercel link` writes `.vercel/project.json` with the project's `orgId` and `projectId`, which the pipeline needs. Commit that one file; the IDs aren't secret. `vercel link` adds a `.vercel` line to `.gitignore`, which ignores the whole folder. Replace that line with these two, so the rest of `.vercel/` stays ignored (`vercel pull` can write environment files there):
+
+```gitignore
+.vercel/*
+!.vercel/project.json
+```
+
+The Vercel CLI may add the `.vercel` line again later. Before committing, run `git status` and check that `.vercel/project.json` is listed. Once it's committed, the line no longer affects it.
+
+To keep the IDs out of the repo instead, leave `.gitignore` as it is and set them as secrets:
+
+```sh
+gh secret set VERCEL_ORG_ID --body "<orgId>"
+gh secret set VERCEL_PROJECT_ID --body "<projectId>"
+```
+
+The build uses the environment variables saved on the Vercel project, and a new project has none. Add the ones your app needs (API URLs, public keys, …) before the first push, in the project's settings on vercel.com or with:
+
+```sh
+npx vercel env add NAME production
+```
+
+Then create a token at [vercel.com/account/tokens](https://vercel.com/account/tokens). Set its scope to the team that owns the project and give it an expiration date; releases fail once it expires, so renew it before then. Set it in the project repo:
+
+```sh
+gh secret set VERCEL_TOKEN
+```
+
+### 4. Add the release workflow
 
 Add `.github/workflows/release-and-deploy.yml` (also in [`templates/`](templates/.github/workflows/release-and-deploy.yml)):
 
@@ -120,40 +170,14 @@ Optional inputs, set with `with:` under `release`:
 
 | Input | Default | |
 |---|---|---|
-| `node-version` | `22` | Node version for install and build. |
+| `node-version` | `24` | Node version for install and build. |
 | `app-url` | (from Vercel) | Production address to record and link. Only needed if the project has several custom domains and the wrong one is picked. |
-
-### 4. Link the Vercel project and set the token
-
-Run `npx vercel link` in the project. It creates or picks the Vercel project and writes `.vercel/project.json` with its `orgId` and `projectId`. The pipeline needs these IDs. Give them to it in one of two ways:
-
-**Commit `.vercel/project.json` (recommended).** The IDs aren't secret. `vercel link` adds a `.vercel` line to `.gitignore`, which ignores the whole folder. Replace that line with these two, so `project.json` is committed in step 5 while the rest of `.vercel/` stays ignored (`vercel pull` can write environment files there):
-
-```gitignore
-.vercel/*
-!.vercel/project.json
-```
-
-**Or set them as GitHub secrets.** Keep the `.vercel` line in `.gitignore` and copy the two IDs from `.vercel/project.json`:
-
-```sh
-gh secret set VERCEL_ORG_ID --body "<orgId>"
-gh secret set VERCEL_PROJECT_ID --body "<projectId>"
-```
-
-If both are present, the secrets take precedence over the file. `vercel.json` can't hold these IDs.
-
-Either way, create a token at [vercel.com/account/tokens](https://vercel.com/account/tokens) and set it in the project repo:
-
-```sh
-gh secret set VERCEL_TOKEN
-```
 
 ### 5. Push to `main`
 
-If you want Discord notifications, [set them up](#add-discord-notifications-optional) before proceeding with this step. The notifier only fires once its file is on the release branch, so adding it afterwards means the first release posts nothing.
+If you want notifications, [set them up](#add-notifications-optional) before proceeding with this step. The notifier only fires once its file is on the release branch, so adding it afterwards means the first release posts nothing.
 
-Commit the files above with a conventional message, such as `ci: add release pipeline`, and push. The first run behaves as follows:
+Commit the files above (including `vercel.json` and `.vercel/project.json`) with a conventional message, such as `ci: add release pipeline`, and push. The first run behaves as follows:
 
 - **No version tag yet:** it tags the current `package.json` version as the first release, without bumping it.
 - **Existing `vX.Y.Z` tags:** it bumps from the latest tag as usual.
@@ -201,13 +225,7 @@ With `public/app-icon.png` in the repo, the bot uses it as its avatar. To change
 
 ## Preview deploys (optional)
 
-To get a preview URL for every branch and pull request, connect the GitHub repo to the Vercel project:
-
-```sh
-npx vercel git connect
-```
-
-The first time, this needs the Vercel GitHub app installed on your GitHub account; if it isn't, the command links you to the install page. Then add a `vercel.json` that switches off Vercel's own deploy of `main`, so this pipeline stays the only production deploy:
+To get a preview URL for every branch and pull request, switch off only Vercel's deploy of the release branch in `vercel.json`, instead of all of them:
 
 ```json
 {
@@ -219,4 +237,6 @@ The first time, this needs the Vercel GitHub app installed on your GitHub accoun
 }
 ```
 
-On the Hobby plan this only works for repos owned by a personal account, not by a GitHub organization.
+Production still goes only through this pipeline. Previews build with the project's Preview environment variables, so point them at a test database or service, not production. Otherwise a preview of an unfinished branch can change real data.
+
+The repo must be connected to the Vercel project, which `vercel link` usually does. On the Hobby plan this only works for repos owned by a personal account, not by a GitHub organization.

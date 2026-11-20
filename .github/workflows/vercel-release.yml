@@ -7,15 +7,16 @@ name: Vercel release
 # configuration. Notifications are separate: a project triggers them with `workflow_run` when this pipeline completes.
 #
 # The calling repo needs: package.json with a "release" script (commit-and-tag-version) and the commitlint dev deps,
-# commitlint.config.mjs, optionally .versionrc.json (changelog sections), and the Vercel project IDs, either committed in .vercel/project.json (written
-# by `vercel link`) or as the VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets.
+# commitlint.config.mjs, optionally .versionrc.json (changelog sections), and vercel.json switching off Vercel's own
+# deploys of the release branch, and the Vercel project IDs: either committed in .vercel/project.json (written by
+# `vercel link`) or as the VERCEL_ORG_ID / VERCEL_PROJECT_ID secrets.
 # The caller must grant `permissions: contents: write, deployments: write` and pass the secrets (`secrets: inherit`).
 on:
   workflow_call:
     inputs:
       node-version:
         type: string
-        default: "22"
+        default: "24"
       app-url:
         description: Production address to record. Leave empty to read it from the Vercel project's domains.
         type: string
@@ -36,7 +37,7 @@ jobs:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
     steps:
       - name: Check out with full history and tags
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -55,7 +56,29 @@ jobs:
           echo "VERCEL_ORG_ID=$ORG" >> "$GITHUB_ENV"
           echo "VERCEL_PROJECT_ID=$PROJECT" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-node@v4
+      # This pipeline must be the only production deploy. If the repo is connected to the Vercel project, Vercel deploys
+      # every push itself unless vercel.json switches that off, either entirely (false) or for the release branch only
+      # (keeping preview deploys). Only a warning, so a Vercel API problem never blocks a release.
+      - name: Check that Vercel's own deploys of the release branch are off
+        continue-on-error: true
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          QUERY=""
+          case "$VERCEL_ORG_ID" in team_*) QUERY="?teamId=$VERCEL_ORG_ID" ;; esac
+          PROJECT_JSON=$(curl -fsS -H "Authorization: Bearer $VERCEL_TOKEN" "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID$QUERY")
+          if [ -z "$(jq -r '.link.type // empty' <<< "$PROJECT_JSON")" ]; then
+            echo "The repo is not connected to the Vercel project."
+            exit 0
+          fi
+          CONFIG="$(jq -r '.rootDirectory // "."' <<< "$PROJECT_JSON")/vercel.json"
+          if jq -e --arg b "$BRANCH" '.git.deploymentEnabled == false or .git.deploymentEnabled[$b] == false' "$CONFIG" > /dev/null 2>&1; then
+            echo "Vercel's own deploys of $BRANCH are off in $CONFIG."
+          else
+            echo "::warning::The repo is connected to the Vercel project, so Vercel also deploys every push. Add \"git\": { \"deploymentEnabled\": false } to $CONFIG."
+          fi
+
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ inputs.node-version }}
           cache: npm
