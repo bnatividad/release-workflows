@@ -1,0 +1,35 @@
+name: Discord release notification
+description: Posts the "deployed" or "failed" message for a release, listing the commits since the previous tag.
+inputs:
+  webhook-url:
+    description: Discord channel webhook. When empty, the step is skipped.
+    required: false
+  state:
+    description: '"success" or anything else for a failure.'
+    required: true
+  sha:
+    description: The release commit.
+    required: true
+  prev-tag:
+    description: The tag before this release (may be empty).
+    required: false
+  app-url:
+    description: Public production address, linked in the message.
+    required: false
+  color:
+    description: Hex color for the stripe of a successful message.
+    required: false
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        WEBHOOK_URL: ${{ inputs.webhook-url }}
+        STATE: ${{ inputs.state }}
+        REPO: ${{ github.repository }}
+        SHA: ${{ inputs.sha }}
+        PREV_TAG: ${{ inputs.prev-tag }}
+        APP_URL: ${{ inputs.app-url }}
+        EMBED_COLOR: ${{ inputs.color }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: node "$GITHUB_ACTION_PATH/discord-notify.mjs"

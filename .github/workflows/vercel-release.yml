@@ -1,0 +1,101 @@
+name: Vercel release
+
+# Reusable release pipeline. A project calls it on every push to main; it checks the commit messages, picks the next
+# version from them (fix -> patch, breaking -> minor while below 1.0), writes CHANGELOG.md, commits and tags the release,
+# deploys that versioned build to Vercel, and tells Discord.
+#
+# The calling repo needs: package.json with a "release" script (commit-and-tag-version) and the commitlint dev deps,
+# .versionrc.json, commitlint.config.mjs, and vercel.json with Vercel's own deploy of main switched off.
+# The caller must grant `permissions: contents: write` and pass the secrets (`secrets: inherit` is simplest).
+#
+# Caller repository variables (read through `vars`): APP_URL, DISCORD_COLOR — both optional.
+on:
+  workflow_call:
+    inputs:
+      node-version:
+        type: string
+        default: "22"
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+      VERCEL_ORG_ID:
+        required: true
+      VERCEL_PROJECT_ID:
+        required: true
+      DISCORD_WEBHOOK_URL:
+        required: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      HUSKY: "0"
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - name: Check out with full history and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check commit messages
+        env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          FROM="$BEFORE"
+          if [ -z "$FROM" ] || [ "$FROM" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$FROM^{commit}" 2>/dev/null; then
+            FROM="$AFTER~1"
+          fi
+          npx commitlint --from "$FROM" --to "$AFTER" --verbose
+
+      - name: Pick the version, update CHANGELOG.md, commit and tag
+        id: release
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+          if [ -z "$PREV_TAG" ]; then
+            echo "::warning::No release tag found; tagging the current version as the first release."
+            npm run release -- --first-release
+          else
+            npm run release
+          fi
+          echo "version=$(jq -r .version package.json)" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Build first: if it doesn't build, nothing has been pushed or released yet.
+      - name: Build for Vercel
+        env:
+          VERCEL_GIT_COMMIT_SHA: ${{ steps.release.outputs.sha }}
+        run: |
+          npx vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+          npx vercel build --prod --token="$VERCEL_TOKEN"
+
+      # Push before deploying, so the version is recorded even if the deploy fails.
+      - name: Push the release commit and tag
+        run: git push --follow-tags origin HEAD:main
+
+      - name: Deploy the build to Vercel
+        run: npx vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
+
+      # The notifier lives in this shared repo as an action, so callers don't need their own copy of the script.
+      - name: Tell Discord
+        if: always()
+        uses: bnatividad/release-workflows/.github/actions/discord-notify@v1
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          state: ${{ job.status }}
+          sha: ${{ steps.release.outputs.sha || github.sha }}
+          prev-tag: ${{ steps.release.outputs.prev_tag }}
+          app-url: ${{ vars.APP_URL }}
+          color: ${{ vars.DISCORD_COLOR }}
