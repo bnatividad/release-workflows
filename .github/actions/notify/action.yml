@@ -20,7 +20,7 @@ inputs:
   discord-webhook-url:
     description: Discord channel webhook.
     required: false
-  discord-color:
+  discord-stripe-color:
     description: Hex color for the stripe of a successful Discord message.
     required: false
 runs:
@@ -35,5 +35,5 @@ runs:
         APP_URL: ${{ inputs.app-url }}
         RUN_URL: ${{ inputs.run-url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
         DISCORD_WEBHOOK_URL: ${{ inputs.discord-webhook-url }}
-        DISCORD_COLOR: ${{ inputs.discord-color }}
+        DISCORD_STRIPE_COLOR: ${{ inputs.discord-stripe-color }}
       run: node "$GITHUB_ACTION_PATH/notify.mjs"

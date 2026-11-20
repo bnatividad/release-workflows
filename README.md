@@ -1,8 +1,8 @@
 # release-workflows
 
-Reusable GitHub Actions release pipeline: conventional commits → semver bump & changelog → Vercel deploy → notifications (Discord, …).
+Reusable GitHub Actions release pipeline: conventional commits → semver bump & changelog → Vercel deploy → Discord notification.
 
-Every push to `main` releases a new version and deploys it to Vercel production. Notifications are a separate, optional workflow that runs when the release finishes; the release pipeline itself has no notification code.
+Every push to `main` releases a new version and deploys it to Vercel production. Discord notification is a separate, optional workflow that runs when the release finishes; the release pipeline itself has no Discord code.
 
 The GitHub repo does not need to be connected to Vercel: the pipeline deploys with the Vercel CLI and a token. This also works for private repos owned by a GitHub organization, which Vercel's free Hobby plan can't connect.
 
@@ -151,7 +151,7 @@ gh secret set VERCEL_TOKEN
 
 ### 5. Push to `main`
 
-If you want notifications, [set them up](#add-notifications-optional) before proceeding with this step. The notifier only fires once its file is on the release branch, so adding it afterwards means the first release posts nothing.
+If you want Discord notifications, [set them up](#add-discord-notifications-optional) before proceeding with this step. The notifier only fires once its file is on the release branch, so adding it afterwards means the first release posts nothing.
 
 Commit the files above with a conventional message, such as `ci: add release pipeline`, and push. The first run behaves as follows:
 
@@ -179,7 +179,8 @@ The bot pushes its release commit straight to `main` using `GITHUB_TOKEN`. If `m
        uses: bnatividad/release-workflows/.github/workflows/notify.yml@v1
        secrets: inherit
        with:
-         discord-color: "95A5A6" # Stripe color of a successful message. Failure is always red.
+         # Discord
+         discord-stripe-color: "95A5A6" # Stripe color of a successful message. Failure is always red.
    ```
 
 2. Turn on the channels you want by setting their secrets.
@@ -200,7 +201,13 @@ With `public/app-icon.png` in the repo, the bot uses it as its avatar. To change
 
 ## Preview deploys (optional)
 
-To get a preview URL for every branch and pull request, connect the GitHub repo to the Vercel project in Vercel's dashboard. Then add a `vercel.json` that switches off Vercel's own deploy of `main`, so this pipeline stays the only production deploy:
+To get a preview URL for every branch and pull request, connect the GitHub repo to the Vercel project:
+
+```sh
+npx vercel git connect
+```
+
+The first time, this needs the Vercel GitHub app installed on your GitHub account; if it isn't, the command links you to the install page. Then add a `vercel.json` that switches off Vercel's own deploy of `main`, so this pipeline stays the only production deploy:
 
 ```json
 {
@@ -213,14 +220,3 @@ To get a preview URL for every branch and pull request, connect the GitHub repo 
 ```
 
 On the Hobby plan this only works for repos owned by a personal account, not by a GitHub organization.
-
-## Day to day
-
-- Write commits as `type(scope): description`, for example `feat(editor): add undo`. The husky hook rejects other formats locally, and CI rejects them on push.
-- `fix` and `feat` release a new patch version while below 1.0. A `!` after the type (`feat!:`), or a `BREAKING CHANGE:` footer, releases a new minor version. Other types also release a patch version, but appear in the changelog only if `.versionrc.json` lists them.
-- Every push to `main` is a production release. Work on a branch and merge when it's ready.
-- Pull the bot's release commit (`git pull`) before your next push to `main`.
-
-## Versioning
-
-Callers pin `@v1`. Backward-compatible changes move the `v1` tag; breaking changes get `v2`.

@@ -16,4 +16,5 @@ jobs:
     uses: bnatividad/release-workflows/.github/workflows/notify.yml@v1
     secrets: inherit
     with:
-      discord-color: "95A5A6" # Stripe color of a successful message (hex, see https://htmlcolorcodes.com/). Failure is always red.
+      # Discord
+      discord-stripe-color: "95A5A6" # Stripe color of a successful message (hex, see https://htmlcolorcodes.com/). Failure is always red.

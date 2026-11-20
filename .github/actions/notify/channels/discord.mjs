@@ -1,6 +1,6 @@
 // Discord channel: posts the release summary as an embed through a channel webhook.
 //
-// Environment: DISCORD_WEBHOOK_URL (enables the channel), DISCORD_COLOR (optional hex color for the stripe on the left
+// Environment: DISCORD_WEBHOOK_URL (enables the channel), DISCORD_STRIPE_COLOR (optional hex color for the stripe on the left
 // of a successful message, gray when unset or invalid; a failure is always red).
 const DEFAULT_COLOR = 0x95a5a6;
 const FAILURE_COLOR = 0xe74c3c;
@@ -11,7 +11,7 @@ export default {
   enabled: (env) => Boolean(env.DISCORD_WEBHOOK_URL),
 
   async send(summary, env, { dryRun }) {
-    const hex = (env.DISCORD_COLOR ?? "").trim().replace(/^#/, "");
+    const hex = (env.DISCORD_STRIPE_COLOR ?? "").trim().replace(/^#/, "");
     const successColor = /^[0-9a-f]{6}$/i.test(hex) ? parseInt(hex, 16) : DEFAULT_COLOR;
 
     let body = summary.groups

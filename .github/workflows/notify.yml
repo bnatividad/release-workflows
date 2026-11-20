@@ -9,12 +9,12 @@ name: Release notify
 #   - the live address: the URL of the release's production deployment (or the latest one, if this run didn't deploy)
 #
 # It posts to every channel whose secret is set (see .github/actions/notify/channels/); with none, it posts nothing.
-# Channels: Discord (secret DISCORD_WEBHOOK_URL, input discord-color).
+# Channels: Discord (secret DISCORD_WEBHOOK_URL, input discord-stripe-color).
 # The caller must grant `permissions: contents: read, deployments: read`.
 on:
   workflow_call:
     inputs:
-      discord-color:
+      discord-stripe-color:
         description: Hex stripe color for a successful Discord message (gray when empty). A failure is always red.
         type: string
         default: ""
@@ -69,4 +69,4 @@ jobs:
           app-url: ${{ steps.find.outputs.app_url }}
           run-url: ${{ github.event.workflow_run.html_url }}
           discord-webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          discord-color: ${{ inputs.discord-color }}
+          discord-stripe-color: ${{ inputs.discord-stripe-color }}
