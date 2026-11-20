@@ -2,13 +2,12 @@ name: Vercel release
 
 # Reusable release pipeline. A project calls it on every push to main; it checks the commit messages, picks the next
 # version from them (fix -> patch, breaking -> minor while below 1.0), writes CHANGELOG.md, commits and tags the release,
-# deploys that versioned build to Vercel, and tells Discord.
+# and deploys that versioned build to Vercel. Notifications are separate: see discord-notify.yml, which a project
+# triggers with `workflow_run` when this pipeline completes.
 #
 # The calling repo needs: package.json with a "release" script (commit-and-tag-version) and the commitlint dev deps,
 # .versionrc.json, commitlint.config.mjs, and vercel.json with Vercel's own deploy of main switched off.
 # The caller must grant `permissions: contents: write` and pass the secrets (`secrets: inherit` is simplest).
-#
-# Caller repository variables (read through `vars`): APP_URL, DISCORD_COLOR — both optional.
 on:
   workflow_call:
     inputs:
@@ -22,8 +21,6 @@ on:
         required: true
       VERCEL_PROJECT_ID:
         required: true
-      DISCORD_WEBHOOK_URL:
-        required: false
 
 jobs:
   release:
@@ -87,15 +84,3 @@ jobs:
 
       - name: Deploy the build to Vercel
         run: npx vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN"
-
-      # The notifier lives in this shared repo as an action, so callers don't need their own copy of the script.
-      - name: Tell Discord
-        if: always()
-        uses: bnatividad/release-workflows/.github/actions/discord-notify@v1
-        with:
-          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
-          state: ${{ job.status }}
-          sha: ${{ steps.release.outputs.sha || github.sha }}
-          prev-tag: ${{ steps.release.outputs.prev_tag }}
-          app-url: ${{ vars.APP_URL }}
-          color: ${{ vars.DISCORD_COLOR }}

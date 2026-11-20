@@ -1,0 +1,52 @@
+name: Discord notify
+
+# Reusable notifier. A project calls it from a workflow that runs `on: workflow_run` when its release workflow
+# completes, so the release pipeline itself never mentions Discord. Everything it needs comes from that event and git:
+#   - the run's result and link: github.event.workflow_run
+#   - the release: the first tag that contains the pushed commit (none if the run failed before tagging)
+#   - the previous release: the latest tag reachable from the pushed commit
+#
+# Secrets: DISCORD_WEBHOOK_URL (without it, nothing is posted). Variables: APP_URL, DISCORD_COLOR (both optional).
+on:
+  workflow_call:
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        required: false
+
+jobs:
+  notify:
+    # Skip runs where the release job didn't run at all (e.g. the bot's own "chore(release)" commit).
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion != 'skipped' &&
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      !startsWith(github.event.workflow_run.head_commit.message, 'chore(release)')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out with full history and tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find the release
+        id: find
+        env:
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 "$HEAD_SHA" 2>/dev/null || true)
+          NEW_TAG=$(git tag --contains "$HEAD_SHA" --sort=creatordate | head -n 1)
+          if [ -n "$NEW_TAG" ]; then SHA=$(git rev-list -n 1 "$NEW_TAG"); else SHA="$HEAD_SHA"; fi
+          git checkout -q "$SHA"
+          echo "Release ${NEW_TAG:-(none)} at $SHA, previous ${PREV_TAG:-(none)}"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
+
+      - uses: bnatividad/release-workflows/.github/actions/discord-notify@v1
+        with:
+          webhook-url: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          state: ${{ github.event.workflow_run.conclusion }}
+          sha: ${{ steps.find.outputs.sha }}
+          prev-tag: ${{ steps.find.outputs.prev_tag }}
+          app-url: ${{ vars.APP_URL }}
+          color: ${{ vars.DISCORD_COLOR }}
+          run-url: ${{ github.event.workflow_run.html_url }}

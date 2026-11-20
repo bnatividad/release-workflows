@@ -19,6 +19,9 @@ inputs:
   color:
     description: Hex color for the stripe of a successful message.
     required: false
+  run-url:
+    description: Link shown on a failure. Defaults to the current run.
+    required: false
 runs:
   using: composite
   steps:
@@ -31,5 +34,5 @@ runs:
         PREV_TAG: ${{ inputs.prev-tag }}
         APP_URL: ${{ inputs.app-url }}
         EMBED_COLOR: ${{ inputs.color }}
-        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_URL: ${{ inputs.run-url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}
       run: node "$GITHUB_ACTION_PATH/discord-notify.mjs"
