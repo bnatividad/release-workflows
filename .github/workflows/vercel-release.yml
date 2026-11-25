@@ -86,6 +86,7 @@ jobs:
       - run: npm ci
 
       - name: Check commit messages
+        id: commits
         env:
           BEFORE: ${{ github.event.before }}
           AFTER: ${{ github.sha }}
@@ -95,15 +96,34 @@ jobs:
             FROM="$AFTER~1"
           fi
           npx commitlint --from "$FROM" --to "$AFTER" --verbose
+          echo "from=$FROM" >> "$GITHUB_OUTPUT"
 
       - name: Pick the version, update CHANGELOG.md, commit and tag
         id: release
+        env:
+          FROM: ${{ steps.commits.outputs.from }}
+          AFTER: ${{ github.sha }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
           echo "prev_tag=$PREV_TAG" >> "$GITHUB_OUTPUT"
-          if [ -z "$PREV_TAG" ]; then
+          # A "Release-As: 1.0.0" footer in one of this push's commits sets the version exactly (the newest one wins).
+          # Only this push's commits are read, so the footer never applies to a later release.
+          RELEASE_AS=$(git log --format='%(trailers:key=Release-As,valueonly)' "$FROM..$AFTER" | sed '/^\s*$/d' | head -n 1 | tr -d '[:space:]')
+          RELEASE_AS="${RELEASE_AS#v}"
+          if [ -n "$RELEASE_AS" ]; then
+            if ! [[ "$RELEASE_AS" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Release-As must be a version like 1.0.0, got \"$RELEASE_AS\"."
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/v$RELEASE_AS" > /dev/null; then
+              echo "::error::Release-As: v$RELEASE_AS is already released."
+              exit 1
+            fi
+            echo "Release-As footer found: releasing v$RELEASE_AS."
+            npm run release -- --release-as "$RELEASE_AS"
+          elif [ -z "$PREV_TAG" ]; then
             echo "::warning::No release tag found; tagging the current version as the first release."
             npm run release -- --first-release
           else

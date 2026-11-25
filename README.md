@@ -16,7 +16,7 @@ Runs on every push to `main`, except the bot's own `chore(release)` commit.
 2. **Check Vercel's own deploys.** Warns if the repo is connected to the Vercel project but `vercel.json` doesn't switch off Vercel's own deploy of the release branch.
 3. **Install.** Runs `npm ci`.
 4. **Check commits.** Fails if any commit in the push doesn't follow [Conventional Commits](https://www.conventionalcommits.org/).
-5. **Version.** [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) picks the next version from the commits, updates `package.json` and `CHANGELOG.md`, and creates the `chore(release): vX.Y.Z` commit and tag locally. Below 1.0, `fix`/`feat` bump the patch and a breaking change bumps the minor. With no tag yet, it tags the current version as the first release.
+5. **Version.** [commit-and-tag-version](https://github.com/absolute-version/commit-and-tag-version) picks the next version from the commits, updates `package.json` and `CHANGELOG.md`, and creates the `chore(release): vX.Y.Z` commit and tag locally. Below 1.0, `fix`/`feat` bump the patch and a breaking change bumps the minor. From 1.0, `fix` bumps the patch, `feat` the minor and a breaking change the major. With no tag yet, it tags the current version as the first release. A [`Release-As:` footer](#set-a-version-yourself) sets the version exactly.
 6. **Build.** `vercel pull` and `vercel build --prod`. If this fails, nothing has been pushed.
 7. **Push.** Pushes the release commit and tag to the branch that triggered the run.
 8. **Deploy.** `vercel deploy --prebuilt --prod`.
@@ -183,6 +183,18 @@ Commit the files above (including `vercel.json` and `.vercel/project.json`) with
 - **Existing `vX.Y.Z` tags:** it bumps from the latest tag as usual.
 
 The bot pushes its release commit straight to `main` using `GITHUB_TOKEN`. If `main` has branch protection that blocks direct pushes, that push fails.
+
+## Set a version yourself
+
+The version normally follows from the commits. To pick it yourself, for example to go from 0.x to 1.0.0, add a `Release-As:` footer to a commit message:
+
+```
+feat: launch the first stable version
+
+Release-As: 1.0.0
+```
+
+The push that contains this commit is released as exactly 1.0.0, and the rest of the run is unchanged. Only that push's commits are read, so later pushes bump from 1.0.0 as usual. The run fails if the version isn't like `1.0.0` or is already released.
 
 ## Add notifications (optional)
 
